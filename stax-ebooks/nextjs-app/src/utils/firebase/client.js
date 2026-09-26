@@ -8,6 +8,16 @@ import {
   signOut,
   onAuthStateChanged,
 } from 'firebase/auth';
+import {
+  getFirestore,
+  doc,
+  setDoc,
+  getDoc,
+  updateDoc,
+  collection,
+  serverTimestamp,
+  onSnapshot,
+} from 'firebase/firestore';
 import { getAnalytics, isSupported } from 'firebase/analytics';
 
 const firebaseConfig = {
@@ -25,6 +35,7 @@ const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+export const db = getFirestore(app);
 
 export const GOOGLE_WEB_CLIENT_ID =
   process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ||
@@ -34,6 +45,77 @@ googleProvider.setCustomParameters({
   prompt: 'select_account',
   client_id: GOOGLE_WEB_CLIENT_ID,
 });
+
+/**
+ * Persists user record into Firestore 'users' collection
+ */
+export async function saveUserToDatabase(user, extraData = {}) {
+  if (!user || !user.uid) return null;
+
+  try {
+    const userDocRef = doc(db, 'users', user.uid);
+
+    let docExists = false;
+    try {
+      const snap = await getDoc(userDocRef);
+      docExists = snap.exists();
+    } catch (_) {}
+
+    const payload = {
+      uid: user.uid,
+      email: user.email || '',
+      displayName:
+        user.displayName ||
+        extraData.displayName ||
+        extraData.name ||
+        (user.email ? user.email.split('@')[0] : 'STAX Reader'),
+      photoURL: user.photoURL || extraData.photoURL || null,
+      phoneNumber: user.phoneNumber || null,
+      providerId:
+        user.providerData?.[0]?.providerId ||
+        extraData.providerId ||
+        (user.email ? 'password' : 'google.com'),
+      emailVerified: Boolean(user.emailVerified),
+      lastLoginAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      ...extraData,
+    };
+
+    if (!docExists) {
+      payload.createdAt = serverTimestamp();
+      payload.role = extraData.role || 'customer';
+    }
+
+    await setDoc(userDocRef, payload, { merge: true });
+    return payload;
+  } catch (err) {
+    console.error('[Firebase DB] Next.js error saving user:', err);
+    return null;
+  }
+}
+
+/**
+ * Retrieves a user document by UID from Firestore
+ */
+export async function getUserFromDatabase(uid) {
+  if (!uid) return null;
+  try {
+    const snap = await getDoc(doc(db, 'users', uid));
+    return snap.exists() ? snap.data() : null;
+  } catch (err) {
+    console.warn('[Firebase DB] Next.js getUser error:', err);
+    return null;
+  }
+}
+
+// Client-side automatic sync for active auth sessions
+if (typeof window !== 'undefined') {
+  onAuthStateChanged(auth, (user) => {
+    if (user) {
+      saveUserToDatabase(user).catch(() => {});
+    }
+  });
+}
 
 // Initialize Analytics on client side
 export let analytics = null;
@@ -53,6 +135,13 @@ export {
   createUserWithEmailAndPassword,
   signOut,
   onAuthStateChanged,
+  doc,
+  setDoc,
+  getDoc,
+  updateDoc,
+  collection,
+  serverTimestamp,
+  onSnapshot,
 };
 
 export default app;

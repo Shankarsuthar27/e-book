@@ -29,6 +29,12 @@ import ToastContainer from './components/ToastContainer';
 import SignInModal from './components/SignInModal';
 import CartCheckoutModal from './components/CartCheckoutModal';
 import CartPage from './components/CartPage';
+import {
+  auth,
+  signOut,
+  onAuthStateChanged,
+  saveUserToDatabase,
+} from './firebase';
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
 
@@ -176,6 +182,7 @@ const Header = ({
   onSelectLang,
   t,
   onOpenSignIn,
+  onSignOut,
   user,
   activeCategoryKey,
   onSelectCategory
@@ -352,18 +359,40 @@ const Header = ({
                 )}
               </button>
 
-              {/* Sign In / Account Button */}
-              <button
-                id="header-signin-btn"
-                onClick={onOpenSignIn}
-                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-800 transition-colors cursor-pointer"
-                title={user ? (user.name || user.email) : (currentLang === 'hi' ? 'साइन इन' : 'Sign in')}
-              >
-                <User className="w-3.5 h-3.5 text-slate-600 flex-shrink-0" />
-                <span className="max-w-[90px] truncate">
-                  {user ? (user.name || user.email?.split('@')[0]) : (currentLang === 'hi' ? 'साइन इन' : 'Sign in')}
-                </span>
-              </button>
+              {/* Sign In / User Profile Badge */}
+              {user ? (
+                <div className="flex items-center gap-1.5 bg-slate-100/90 pl-1.5 pr-2 py-1 rounded-full border border-slate-200/90 text-slate-800 text-xs shadow-xs">
+                  {user.photoURL ? (
+                    <img src={user.photoURL} alt="" className="w-5 h-5 rounded-full object-cover" />
+                  ) : (
+                    <div className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[10px] font-bold">
+                      {(user.name || user.email || 'U')[0].toUpperCase()}
+                    </div>
+                  )}
+                  <span className="max-w-[75px] truncate font-semibold text-[11px]">
+                    {user.name || user.email?.split('@')[0]}
+                  </span>
+                  <button
+                    onClick={onSignOut}
+                    title={currentLang === 'hi' ? 'लॉगआउट करें' : 'Sign out'}
+                    className="text-xs text-slate-400 hover:text-rose-600 ml-0.5 cursor-pointer font-bold px-1 rounded hover:bg-slate-200/70 transition-colors"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <button
+                  id="header-signin-btn"
+                  onClick={onOpenSignIn}
+                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-800 transition-colors cursor-pointer"
+                  title={currentLang === 'hi' ? 'साइन इन' : 'Sign in'}
+                >
+                  <User className="w-3.5 h-3.5 text-slate-600 flex-shrink-0" />
+                  <span className="max-w-[90px] truncate">
+                    {currentLang === 'hi' ? 'साइन इन' : 'Sign in'}
+                  </span>
+                </button>
+              )}
 
               {/* Flat ₹49 badge indicator */}
               <div className="hidden lg:flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-50 border border-amber-200/80 text-amber-800 text-xs font-bold">
@@ -403,18 +432,33 @@ const Header = ({
               {/* User Account / Sign In section */}
               <div className="p-4 border-b border-slate-100 bg-slate-50/80">
                 {user ? (
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-sm">
-                      {(user.name || user.email || 'U')[0].toUpperCase()}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {user.photoURL ? (
+                        <img src={user.photoURL} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
+                      ) : (
+                        <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-xs flex-shrink-0">
+                          {(user.name || user.email || 'U')[0].toUpperCase()}
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-bold text-slate-900 truncate">
+                          {user.name || 'STAX Reader'}
+                        </p>
+                        <p className="text-[10px] text-slate-500 truncate">
+                          {user.email}
+                        </p>
+                      </div>
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-bold text-slate-900 truncate">
-                        {user.name || 'STAX Reader'}
-                      </p>
-                      <p className="text-[11px] text-slate-500 truncate">
-                        {user.email}
-                      </p>
-                    </div>
+                    <button
+                      onClick={() => {
+                        setIsDrawerOpen(false);
+                        if (onSignOut) onSignOut();
+                      }}
+                      className="text-[11px] font-bold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 px-2 py-1 rounded transition-colors cursor-pointer flex-shrink-0"
+                    >
+                      {currentLang === 'hi' ? 'लॉगआउट' : 'Sign out'}
+                    </button>
                   </div>
                 ) : (
                   <button
@@ -877,6 +921,39 @@ export default function App() {
     document.documentElement.lang = currentLang;
   }, [currentLang, t]);
 
+  // Subscribe to Firebase Auth and auto-sync user to Firebase database
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        try {
+          await saveUserToDatabase(user);
+        } catch (e) {
+          console.warn('[Firebase DB] Auth state change save error:', e);
+        }
+        setCurrentUser({
+          uid: user.uid,
+          email: user.email,
+          name: user.displayName || user.email?.split('@')[0],
+          photoURL: user.photoURL,
+        });
+      } else {
+        setCurrentUser(null);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleSignOut = useCallback(async () => {
+    try {
+      await signOut(auth);
+      setCurrentUser(null);
+      addToast(currentLang === 'hi' ? 'आप सफलतापूर्वक लॉगआउट हो गए हैं।' : 'Signed out successfully.', 'info');
+    } catch (err) {
+      console.warn('Sign out error:', err);
+      setCurrentUser(null);
+    }
+  }, [addToast, currentLang]);
+
   // Toast handlers
   const addToast = useCallback((message, type = 'success') => {
     const id = makeToastId();
@@ -1070,6 +1147,7 @@ export default function App() {
         onSelectLang={handleSelectLang}
         t={t}
         onOpenSignIn={() => setIsSignInOpen(true)}
+        onSignOut={handleSignOut}
         user={currentUser}
         activeCategoryKey={activeCategoryKey}
         onSelectCategory={setActiveCategoryKey}

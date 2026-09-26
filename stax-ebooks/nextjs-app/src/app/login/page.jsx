@@ -9,6 +9,7 @@ import {
   signInWithPopup,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  saveUserToDatabase,
 } from '@/utils/firebase/client';
 import { Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
 
@@ -75,12 +76,19 @@ function LoginForm() {
     setIsLoading(true);
 
     try {
+      let cred;
       if (isSignUp) {
-        await createUserWithEmailAndPassword(auth, email, password);
+        cred = await createUserWithEmailAndPassword(auth, email, password);
         setSuccessMsg('Account created successfully! Redirecting...');
       } else {
-        await signInWithEmailAndPassword(auth, email, password);
+        cred = await signInWithEmailAndPassword(auth, email, password);
         setSuccessMsg('Signed in successfully! Opening your digital library...');
+      }
+
+      if (cred?.user) {
+        await saveUserToDatabase(cred.user, {
+          source: isSignUp ? 'email_signup' : 'email_login',
+        });
       }
 
       setTimeout(() => {
@@ -100,7 +108,12 @@ function LoginForm() {
     setOauthLoading(true);
 
     try {
-      await signInWithPopup(auth, googleProvider);
+      const res = await signInWithPopup(auth, googleProvider);
+      if (res?.user) {
+        await saveUserToDatabase(res.user, {
+          source: 'google_oauth',
+        });
+      }
       setSuccessMsg('Signed in with Google successfully! Opening library...');
       setTimeout(() => {
         router.push(nextUrl);

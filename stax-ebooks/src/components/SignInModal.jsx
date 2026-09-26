@@ -6,6 +6,7 @@ import {
   signInWithPopup,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  saveUserToDatabase,
 } from '../firebase';
 import jaunCover from '../assets/covers/jaun_elia.jpg';
 import gunahonCover from '../assets/covers/gunahon.jpg';
@@ -74,6 +75,13 @@ export default function SignInModal({ isOpen, onClose, onLoginSuccess, currentLa
         userCredential = await signInWithEmailAndPassword(auth, email, password);
       }
       const user = userCredential.user;
+
+      // Persist user in Firebase Firestore Database
+      await saveUserToDatabase(user, {
+        displayName: email.split('@')[0],
+        source: isSignUp ? 'email_signup' : 'email_login',
+      });
+
       setSuccessMsg(
         isSignUp
           ? (currentLang === 'hi' ? 'खाता सफलतापूर्वक बनाया गया! स्वागत है।' : 'Account created successfully! Welcome to STAX.')
@@ -126,6 +134,14 @@ export default function SignInModal({ isOpen, onClose, onLoginSuccess, currentLa
     try {
       const result = await signInWithPopup(auth, googleProvider);
       const user = result.user;
+
+      // Persist Google authenticated user in Firebase Firestore Database
+      await saveUserToDatabase(user, {
+        displayName: user.displayName || 'Google User',
+        photoURL: user.photoURL,
+        source: 'google_oauth',
+      });
+
       setSuccessMsg(currentLang === 'hi' ? 'गूगल प्रमाणीकरण सफल! स्वागत है।' : 'Signed in with Google successfully!');
       setTimeout(() => {
         setOauthLoading(false);
