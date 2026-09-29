@@ -19,7 +19,9 @@ import {
   Bookmark,
   User,
   Home,
-  Compass
+  Compass,
+  PackageCheck,
+  Database
 } from 'lucide-react';
 import { EBOOKS } from './data/books';
 import { TRANSLATIONS, AVAILABLE_LANGUAGES } from './data/translations';
@@ -29,11 +31,16 @@ import ToastContainer from './components/ToastContainer';
 import SignInModal from './components/SignInModal';
 import CartCheckoutModal from './components/CartCheckoutModal';
 import CartPage from './components/CartPage';
+import OrdersModal from './components/OrdersModal';
 import {
   auth,
   signOut,
   onAuthStateChanged,
   saveUserToDatabase,
+  getUserFromDatabase,
+  syncUserCartToDatabase,
+  syncUserWishlistToDatabase,
+  recordUserPurchaseInDatabase,
 } from './firebase';
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
@@ -177,6 +184,7 @@ const Header = ({
   searchQuery,
   setSearchQuery,
   onOpenCart,
+  onOpenOrders,
   onLogoClick,
   currentLang,
   onSelectLang,
@@ -358,6 +366,21 @@ const Header = ({
                   </span>
                 )}
               </button>
+
+              {/* My Orders / Purchases Button for Signed-in Users */}
+              {user && (
+                <button
+                  id="header-orders-btn"
+                  onClick={onOpenOrders}
+                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 transition-colors cursor-pointer"
+                  title={currentLang === 'hi' ? 'मेरे ऑर्डर्स व डाउनलोड' : 'My Orders & Downloads'}
+                >
+                  <PackageCheck size={14} />
+                  <span className="hidden sm:inline">
+                    {currentLang === 'hi' ? 'मेरे ऑर्डर्स' : 'My Orders'}
+                  </span>
+                </button>
+              )}
 
               {/* Sign In / User Profile Badge */}
               {user ? (
@@ -543,6 +566,25 @@ const Header = ({
                     </span>
                   )}
                 </button>
+
+                {/* My Orders / Purchases */}
+                {user && (
+                  <button
+                    onClick={() => {
+                      setIsDrawerOpen(false);
+                      if (onOpenOrders) onOpenOrders();
+                    }}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-blue-700 bg-blue-50/70 hover:bg-blue-100 transition-colors text-xs font-semibold cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <PackageCheck size={17} className="text-blue-600" />
+                      <span>{currentLang === 'hi' ? 'मेरे ऑर्डर्स व डाउनलोड' : 'My Orders & Purchases'}</span>
+                    </div>
+                    <span className="text-[10px] font-bold bg-blue-200/80 text-blue-900 px-2 py-0.5 rounded-full">
+                      Firestore
+                    </span>
+                  </button>
+                )}
 
                 <div className="h-[1px] bg-slate-100 my-1" />
 
@@ -882,17 +924,32 @@ const Footer = ({ currentLang, t }) => {
 // ─── Main App Root ────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [cartItems, setCartItems] = useState(() => [EBOOKS[0], EBOOKS[1]]);
+  const [cartItems, setCartItems] = useState(() => {
+    try {
+      const saved = localStorage.getItem('stax_cart');
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return [];
+  });
   const [isCartPage, setIsCartPage] = useState(false);
   const cartCount = cartItems.length;
   const [isScrolled, setIsScrolled] = useState(false);
   const [selectedBook, setSelectedBook] = useState(null);
-  const [wishlist, setWishlist] = useState(new Set());
+  const [wishlist, setWishlist] = useState(() => {
+    try {
+      const saved = localStorage.getItem('stax_wishlist');
+      if (saved) return new Set(JSON.parse(saved));
+    } catch (_) {}
+    return new Set();
+  });
+  const [purchasedBooks, setPurchasedBooks] = useState(new Set());
+  const [isOrdersOpen, setIsOrdersOpen] = useState(false);
   const [toasts, setToasts] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategoryKey, setActiveCategoryKey] = useState('all');
   const [isSignInOpen, setIsSignInOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
+  const pendingBookToAddRef = useRef(null);
 
   // Language state: 'en' or 'hi' (persisted in localStorage, default is 'en' or saved)
   const [currentLang, setCurrentLang] = useState(() => {
@@ -908,6 +965,16 @@ export default function App() {
     return TRANSLATIONS[currentLang] || TRANSLATIONS.en;
   }, [currentLang]);
 
+  // Toast handlers
+  const addToast = useCallback((message, type = 'success') => {
+    const id = makeToastId();
+    setToasts((prev) => [...prev, { id, message, type }]);
+  }, []);
+
+  const removeToast = useCallback((id) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
   // Scroll listener for sticky shadow
   useEffect(() => {
     const handleScroll = () => setIsScrolled(window.scrollY > 20);
@@ -921,12 +988,43 @@ export default function App() {
     document.documentElement.lang = currentLang;
   }, [currentLang, t]);
 
-  // Subscribe to Firebase Auth and auto-sync user to Firebase database
+  // Subscribe to Firebase Auth and auto-sync user data to Firebase Firestore
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         try {
           await saveUserToDatabase(user);
+          // Load user's cloud-persisted data from Cloud Firestore
+          const dbUser = await getUserFromDatabase(user.uid);
+          if (dbUser) {
+            // Restore or merge Cart from Firestore
+            if (Array.isArray(dbUser.cart) && dbUser.cart.length > 0) {
+              setCartItems(dbUser.cart);
+              try {
+                localStorage.setItem('stax_cart', JSON.stringify(dbUser.cart));
+              } catch (_) {}
+            } else if (cartItems.length > 0) {
+              // Sync current cart to user's Firestore doc
+              syncUserCartToDatabase(user.uid, cartItems);
+            }
+
+            // Restore or merge Wishlist from Firestore
+            if (Array.isArray(dbUser.wishlist) && dbUser.wishlist.length > 0) {
+              setWishlist((prev) => {
+                const combined = new Set([...prev, ...dbUser.wishlist]);
+                try {
+                  localStorage.setItem('stax_wishlist', JSON.stringify(Array.from(combined)));
+                } catch (_) {}
+                syncUserWishlistToDatabase(user.uid, Array.from(combined));
+                return combined;
+              });
+            }
+
+            // Restore Purchased Books list
+            if (Array.isArray(dbUser.purchasedBooks)) {
+              setPurchasedBooks(new Set(dbUser.purchasedBooks));
+            }
+          }
         } catch (e) {
           console.warn('[Firebase DB] Auth state change save error:', e);
         }
@@ -954,16 +1052,6 @@ export default function App() {
     }
   }, [addToast, currentLang]);
 
-  // Toast handlers
-  const addToast = useCallback((message, type = 'success') => {
-    const id = makeToastId();
-    setToasts((prev) => [...prev, { id, message, type }]);
-  }, []);
-
-  const removeToast = useCallback((id) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  }, []);
-
   // Language change handler
   const handleSelectLang = useCallback((langCode) => {
     setCurrentLang(langCode);
@@ -983,22 +1071,87 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 
-  // Add to cart
+  // Add to cart with Firestore persistence (Sign-in required)
   const handleAddToCart = useCallback((book) => {
+    if (!currentUser) {
+      pendingBookToAddRef.current = book;
+      setIsSignInOpen(true);
+      addToast(
+        currentLang === 'hi'
+          ? 'कार्ट में किताब जोड़ने के लिए कृपया पहले साइन इन करें।'
+          : 'Please sign in to add books to your cart.',
+        'info'
+      );
+      return;
+    }
+
     setCartItems((prev) => {
       if (prev.some((item) => item.id === book.id)) return prev;
-      return [...prev, book];
+      const nextCart = [...prev, book];
+      try {
+        localStorage.setItem('stax_cart', JSON.stringify(nextCart));
+      } catch (_) {}
+      if (currentUser?.uid) {
+        syncUserCartToDatabase(currentUser.uid, nextCart);
+      }
+      return nextCart;
     });
     handleOpenCart();
     const bookTitle = currentLang === 'en' ? (book.titleEn || book.shortTitle || book.title) : book.title;
     addToast(`"${bookTitle}" ${t.cartAddedToast || 'added to cart!'} (₹${book.price})`, 'cart');
-  }, [handleOpenCart, addToast, currentLang, t]);
+  }, [currentUser, handleOpenCart, addToast, currentLang, t]);
 
-  // Immediate Pay via UPI QR
+  // Remove from cart with Firestore persistence
+  const handleRemoveFromCart = useCallback((id) => {
+    setCartItems((prev) => {
+      const nextCart = prev.filter((item) => item.id !== id);
+      try {
+        localStorage.setItem('stax_cart', JSON.stringify(nextCart));
+      } catch (_) {}
+      if (currentUser?.uid) {
+        syncUserCartToDatabase(currentUser.uid, nextCart);
+      }
+      return nextCart;
+    });
+    addToast(currentLang === 'hi' ? 'किताब कार्ट से हटा दी गई।' : 'Book removed from cart.', 'info');
+  }, [currentUser, currentLang, addToast]);
+
+  // Clear cart with Firestore persistence
+  const handleClearCart = useCallback(() => {
+    setCartItems([]);
+    try {
+      localStorage.removeItem('stax_cart');
+    } catch (_) {}
+    if (currentUser?.uid) {
+      syncUserCartToDatabase(currentUser.uid, []);
+    }
+    addToast(currentLang === 'hi' ? 'कार्ट खाली कर दिया गया।' : 'Cart cleared.', 'info');
+  }, [currentUser, currentLang, addToast]);
+
+  // Immediate Pay via UPI QR (Sign-in required)
   const handlePayNow = useCallback((book) => {
+    if (!currentUser) {
+      pendingBookToAddRef.current = book;
+      setIsSignInOpen(true);
+      addToast(
+        currentLang === 'hi'
+          ? 'खरीदारी करने के लिए कृपया पहले साइन इन करें।'
+          : 'Please sign in before proceeding to purchase.',
+        'info'
+      );
+      return;
+    }
+
     setCartItems((prev) => {
       if (prev.some((item) => item.id === book.id)) return prev;
-      return [book, ...prev];
+      const nextCart = [book, ...prev];
+      try {
+        localStorage.setItem('stax_cart', JSON.stringify(nextCart));
+      } catch (_) {}
+      if (currentUser?.uid) {
+        syncUserCartToDatabase(currentUser.uid, nextCart);
+      }
+      return nextCart;
     });
     handleOpenCart();
     const bookTitle = currentLang === 'en' ? (book.titleEn || book.shortTitle || book.title) : book.title;
@@ -1008,9 +1161,9 @@ export default function App() {
         : `UPI QR checkout loaded for "${bookTitle}".`,
       'info'
     );
-  }, [handleOpenCart, currentLang, addToast]);
+  }, [currentUser, handleOpenCart, currentLang, addToast]);
 
-  // Wishlist toggle
+  // Wishlist toggle with Firestore persistence
   const handleToggleWishlist = useCallback((bookId) => {
     const book = EBOOKS.find((b) => b.id === bookId);
     const bookTitle = book ? (currentLang === 'en' ? (book.titleEn || book.shortTitle || book.title) : book.title) : '';
@@ -1024,9 +1177,15 @@ export default function App() {
         next.add(bookId);
         addToast(`"${bookTitle}" ${t.wishlistAddedToast || 'saved to bookmarks ♥'}`, 'wishlist_add');
       }
+      try {
+        localStorage.setItem('stax_wishlist', JSON.stringify(Array.from(next)));
+      } catch (_) {}
+      if (currentUser?.uid) {
+        syncUserWishlistToDatabase(currentUser.uid, Array.from(next));
+      }
       return next;
     });
-  }, [addToast, currentLang, t]);
+  }, [addToast, currentLang, t, currentUser]);
 
   const handleOpenBook = useCallback((book) => {
     setSelectedBook(book);
@@ -1142,6 +1301,7 @@ export default function App() {
           }
         }}
         onOpenCart={handleOpenCart}
+        onOpenOrders={() => setIsOrdersOpen(true)}
         onLogoClick={handleBackToHome}
         currentLang={currentLang}
         onSelectLang={handleSelectLang}
@@ -1156,13 +1316,46 @@ export default function App() {
       {/* Authentication Modal (Split-Screen UI matching reference image) */}
       <SignInModal
         isOpen={isSignInOpen}
-        onClose={() => setIsSignInOpen(false)}
+        onClose={() => {
+          setIsSignInOpen(false);
+          pendingBookToAddRef.current = null;
+        }}
         onLoginSuccess={(u) => {
           setCurrentUser(u);
+          setIsSignInOpen(false);
           addToast(currentLang === 'hi' ? `स्वागत है, ${u.name || u.email}!` : `Welcome back, ${u.name || u.email}!`, 'success');
+          if (pendingBookToAddRef.current) {
+            const pendingBook = pendingBookToAddRef.current;
+            pendingBookToAddRef.current = null;
+            setCartItems((prev) => {
+              if (prev.some((item) => item.id === pendingBook.id)) return prev;
+              const nextCart = [...prev, pendingBook];
+              try {
+                localStorage.setItem('stax_cart', JSON.stringify(nextCart));
+              } catch (_) {}
+              if (u?.uid) {
+                syncUserCartToDatabase(u.uid, nextCart);
+              }
+              return nextCart;
+            });
+            handleOpenCart();
+            const bookTitle = currentLang === 'en' ? (pendingBook.titleEn || pendingBook.shortTitle || pendingBook.title) : pendingBook.title;
+            addToast(`"${bookTitle}" ${t.cartAddedToast || 'added to cart!'} (₹${pendingBook.price})`, 'cart');
+          }
         }}
         currentLang={currentLang}
         t={t}
+      />
+
+      {/* Orders & Purchases Modal (Powered by Cloud Firestore) */}
+      <OrdersModal
+        isOpen={isOrdersOpen}
+        onClose={() => setIsOrdersOpen(false)}
+        currentUser={currentUser}
+        currentLang={currentLang}
+        t={t}
+        addToast={addToast}
+        onOpenBook={handleOpenBook}
       />
 
       {/* Conditional View: Full Page Book Detail View vs. Full Page Cart View vs. Home Page */}
@@ -1184,19 +1377,18 @@ export default function App() {
         <main className="pt-14 sm:pt-16 pb-12">
           <CartPage
             cartItems={cartItems}
-            onRemoveItem={(id) => {
-              setCartItems((prev) => prev.filter((item) => item.id !== id));
-              addToast(currentLang === 'hi' ? 'किताब कार्ट से हटा दी गई।' : 'Book removed from cart.', 'info');
-            }}
-            onClearCart={() => {
-              setCartItems([]);
-              addToast(currentLang === 'hi' ? 'कार्ट खाली कर दिया गया।' : 'Cart cleared.', 'info');
-            }}
+            onRemoveItem={handleRemoveFromCart}
+            onClearCart={handleClearCart}
             onBack={handleBackToHome}
             onOpenBook={handleOpenBook}
             currentLang={currentLang}
             t={t}
             addToast={addToast}
+            currentUser={currentUser}
+            onOpenSignIn={() => setIsSignInOpen(true)}
+            onPaymentSuccess={(order, items) => {
+              setPurchasedBooks((prev) => new Set([...prev, ...items.map((i) => i.id)]));
+            }}
           />
         </main>
       ) : (

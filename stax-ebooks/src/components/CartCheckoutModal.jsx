@@ -15,8 +15,11 @@ import {
   CheckCircle2,
   Smartphone,
   Check,
+  Database,
+  Download
 } from 'lucide-react';
 import QRScannerModal from './QRScannerModal';
+import { saveOrderToDatabase, recordUserPurchaseInDatabase } from '../firebase';
 
 export default function CartCheckoutModal({
   isOpen,
@@ -29,10 +32,14 @@ export default function CartCheckoutModal({
   t,
   addToast,
   initialStep = 'cart',
+  currentUser = null,
+  onPaymentSuccess = null,
 }) {
   const [step, setStep] = useState(initialStep); // 'cart' | 'payment'
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [manualCode, setManualCode] = useState('');
+  const [confirmedOrder, setConfirmedOrder] = useState(null);
+  const [purchasedSnapshot, setPurchasedSnapshot] = useState([]);
   const [appliedDiscount, setAppliedDiscount] = useState(null);
   const [copied, setCopied] = useState(false);
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
@@ -149,23 +156,67 @@ export default function CartCheckoutModal({
     }
   };
 
-  const handleConfirmPayment = () => {
+  const handleConfirmPayment = async () => {
     setIsProcessingPayment(true);
-    setTimeout(() => {
-      setIsProcessingPayment(false);
+    const itemsSnapshot = [...cartItems];
+    setPurchasedSnapshot(itemsSnapshot);
+
+    try {
+      const orderPayload = {
+        userId: currentUser?.uid || 'guest',
+        userEmail: currentUser?.email || 'customer@stax-ebooks.com',
+        userName: currentUser?.name || 'STAX Customer',
+        items: itemsSnapshot.map((item) => ({
+          id: item.id,
+          title: item.title,
+          titleEn: item.titleEn || item.title || '',
+          author: item.author || '',
+          price: item.price || 49,
+          coverImage: item.coverImage || item.coverUrl || '',
+        })),
+        totalAmount: finalTotal,
+        paymentMethod: 'UPI QR Modal',
+        upiPayee: payeeName,
+        upiId: upiId,
+        status: 'completed',
+        channel: 'modal-checkout',
+      };
+
+      const savedOrder = await saveOrderToDatabase(orderPayload);
+      setConfirmedOrder(savedOrder);
+
+      if (currentUser?.uid) {
+        await recordUserPurchaseInDatabase(
+          currentUser.uid,
+          itemsSnapshot.map((i) => i.id),
+          savedOrder?.orderId
+        );
+      }
+
       setIsPaymentCompleted(true);
+      if (onPaymentSuccess) {
+        onPaymentSuccess(savedOrder, itemsSnapshot);
+      }
+
       if (addToast) {
         addToast(
           currentLang === 'hi'
-            ? '🎉 भुगतान सफल! सभी ई-बुक्स डाउनलोड के लिए तैयार हैं।'
-            : '🎉 Payment Successful! All digital e-books are ready for download.',
+            ? '🎉 भुगतान सफल! ऑर्डर डेटाबेस में सुरक्षित हो गया है।'
+            : '🎉 Payment Successful! Order saved to Firestore database.',
           'success'
         );
       }
+
       if (onClearCart) {
         onClearCart();
       }
-    }, 1200);
+    } catch (err) {
+      console.error('Modal payment save error:', err);
+      setIsPaymentCompleted(true);
+      if (onClearCart) onClearCart();
+    } finally {
+      setIsProcessingPayment(false);
+    }
   };
 
   if (!isOpen) return null;
@@ -409,6 +460,16 @@ export default function CartCheckoutModal({
                         ₹{finalTotal}
                       </span>
                     </div>
+
+                    {/* Notice: To get your book, scan QR code */}
+                    <div className="mt-2 py-1.5 px-3 bg-amber-50/90 border border-amber-200/90 rounded-xl text-amber-900 text-xs font-semibold flex items-center gap-2">
+                      <QrCode size={14} className="text-amber-700 flex-shrink-0" />
+                      <span>
+                        {currentLang === 'hi'
+                          ? 'अपनी किताब पाने के लिए QR कोड स्कैन करें'
+                          : 'To get your book, scan the QR code'}
+                      </span>
+                    </div>
                   </div>
 
                   {/* Manual Promo code or QR string input */}
@@ -451,7 +512,7 @@ export default function CartCheckoutModal({
               {!isPaymentCompleted ? (
                 <div className="w-full max-w-sm flex flex-col items-center">
                   {/* Amount Payable Pill */}
-                  <div className="w-full bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-3.5 flex items-center justify-between mb-4 shadow-2xs">
+                  <div className="w-full bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-3.5 flex items-center justify-between mb-3 shadow-2xs">
                     <div>
                       <span className="text-[11px] font-bold text-blue-900 block">
                         {currentLang === 'hi' ? 'कुल देय राशि:' : 'Total Payable Amount:'}
@@ -461,6 +522,16 @@ export default function CartCheckoutModal({
                       </span>
                     </div>
                     <span className="text-2xl font-black text-blue-700 font-sans">₹{finalTotal}</span>
+                  </div>
+
+                  {/* Instruction banner: To get your book, scan the QR code */}
+                  <div className="w-full bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl py-2 px-3 mb-3 text-center flex items-center justify-center gap-1.5 text-xs font-bold shadow-2xs">
+                    <Sparkles size={14} className="text-emerald-600 flex-shrink-0" />
+                    <span>
+                      {currentLang === 'hi'
+                        ? 'अपनी किताब पाने के लिए QR कोड स्कैन करें'
+                        : 'To get your book, scan the QR code'}
+                    </span>
                   </div>
 
                   {/* Shankar Suthar Google Pay UPI QR Image */}
@@ -519,27 +590,11 @@ export default function CartCheckoutModal({
                   {/* Deep Link to Open directly on mobile device */}
                   <a
                     href={upiDeepLink}
-                    className="w-full mt-3 flex items-center justify-center gap-1.5 py-2.5 px-3 text-xs font-bold text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-xl border border-blue-200 transition-colors"
+                    className="w-full mt-3 flex items-center justify-center gap-1.5 py-3 px-4 text-xs sm:text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-md shadow-blue-600/20 transition-all cursor-pointer"
                   >
                     <span>{currentLang === 'hi' ? 'मोबाइल UPI ऐप में खोलें' : 'Open in Phone UPI App'}</span>
-                    <ExternalLink size={13} />
+                    <ExternalLink size={14} />
                   </a>
-
-                  {/* Payment Confirmation Button */}
-                  <button
-                    onClick={handleConfirmPayment}
-                    disabled={isProcessingPayment}
-                    className="w-full mt-3 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white font-bold py-3 px-4 rounded-xl text-xs sm:text-sm shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
-                  >
-                    {isProcessingPayment ? (
-                      <span>{currentLang === 'hi' ? 'सत्यापित हो रहा है...' : 'Verifying Payment...'}</span>
-                    ) : (
-                      <>
-                        <CheckCircle2 size={18} />
-                        <span>{currentLang === 'hi' ? 'मैंने भुगतान कर दिया है' : 'I Have Completed Payment'}</span>
-                      </>
-                    )}
-                  </button>
 
                   {/* Back to Cart link */}
                   <button

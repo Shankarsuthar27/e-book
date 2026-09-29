@@ -129,30 +129,14 @@ export default function CheckoutPaymentModal({
               )}
             </div>
 
-            {/* Open in Mobile UPI App Direct Link */}
+            {/* Deep Link to Open directly on mobile device */}
             <a
               href={upiDeepLink}
-              className="w-full mt-3 flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-bold text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-xl border border-blue-200 transition-colors"
+              className="w-full mt-3 flex items-center justify-center gap-1.5 py-2.5 px-3 text-xs sm:text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-sm transition-all cursor-pointer"
             >
-              <span>{currentLang === 'hi' ? 'अपने फोन के UPI ऐप में खोलें' : 'Open in UPI App on this device'}</span>
+              <span>{currentLang === 'hi' ? 'अपने फोन के UPI ऐप में खोलें' : 'Open in Phone UPI App'}</span>
               <ExternalLink size={13} />
             </a>
-
-            {/* Confirm Payment Action Button */}
-            <button
-              onClick={handleConfirmPayment}
-              disabled={isProcessing}
-              className="w-full mt-3 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white font-bold py-2.5 px-4 rounded-xl text-xs sm:text-sm shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
-            >
-              {isProcessing ? (
-                <span>{currentLang === 'hi' ? 'भुगतान सत्यापित हो रहा है...' : 'Verifying Payment...'}</span>
-              ) : (
-                <>
-                  <CheckCircle2 size={16} />
-                  <span>{currentLang === 'hi' ? 'मैंने भुगतान कर दिया है' : 'I Have Completed Payment'}</span>
-                </>
-              )}
-            </button>
 
             <p className="mt-2 text-[10px] text-slate-400 text-center flex items-center justify-center gap-1">
               <ShieldCheck size={12} className="text-emerald-500" />
